@@ -22,6 +22,24 @@ def test_healthcheck():
     return response.status_code == 200
 
 
+def test_process_faces(group_id, image_path):
+    """
+    Test processing faces in an image.
+
+    Args:
+        group_id (str): Group identifier
+        image_path (str): Path to the image containing faces
+    """
+    image = encode_image(image_path)
+
+    data = {"group_id": group_id, "image": image}
+
+    response = requests.post(f"{BASE_URL}/api/process_faces", json=data)
+
+    print("Process Faces Response:", json.dumps(response.json(), indent=2))
+    return response.status_code == 200
+
+
 def test_train_model(group_id, person_image_map):
     """
     Test training a model with sample faces.
@@ -101,7 +119,15 @@ def main():
 
     parser.add_argument(
         "--action",
-        choices=["healthcheck", "train", "recognize", "add", "delete", "all"],
+        choices=[
+            "healthcheck",
+            "train",
+            "recognize",
+            "add",
+            "delete",
+            "process",
+            "all",
+        ],
         required=True,
         help="Action to perform",
     )
@@ -118,9 +144,9 @@ def main():
     if args.action == "healthcheck" or args.action == "all":
         test_healthcheck()
 
-    # For train, recognize, add, and delete, we need group_id
+    # For train, recognize, add, delete, and process, we need group_id
     if (
-        args.action in ["train", "recognize", "add", "delete", "all"]
+        args.action in ["train", "recognize", "add", "delete", "process", "all"]
         and not args.group_id
     ):
         print("Error: group_id is required for this action")
@@ -168,6 +194,14 @@ def main():
     if args.action == "delete" or args.action == "all":
         # For deleting a group, just need group_id
         test_delete_group(args.group_id)
+
+    if args.action == "process" or (args.action == "all" and args.image):
+        # For processing faces, use the specified image
+        if not args.image or len(args.image) != 1:
+            print("Error: exactly one --image is required for processing faces")
+            return
+
+        test_process_faces(args.group_id, args.image[0])
 
 
 if __name__ == "__main__":
