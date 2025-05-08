@@ -1,5 +1,7 @@
 """GPU configuration utilities for deep learning models."""
+
 import os
+
 import tensorflow as tf
 
 
@@ -9,7 +11,7 @@ class GPUManager:
     @staticmethod
     def configure_gpu():
         """Configure TensorFlow to use GPU efficiently.
-        
+
         Returns:
             bool: True if GPU was successfully configured, False otherwise
         """
@@ -41,7 +43,7 @@ class GPUManager:
                 # Optional: Set TensorFlow to use mixed precision for faster computation
                 tf.keras.mixed_precision.set_global_policy("mixed_float16")
                 print("Mixed precision policy enabled")
-                
+
                 return True
             except RuntimeError as e:
                 print(f"GPU configuration error: {str(e)}")

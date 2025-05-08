@@ -99,7 +99,7 @@ def recognize_faces():
 
         # Get group directory through storage_manager
         group_dir = face_service.storage_manager.get_group_dir(group_id)
-        
+
         # Check if model exists
         if not face_service.storage_manager.group_exists(group_id):
             return (
@@ -134,6 +134,7 @@ def recognize_faces():
             finally:
                 # Clean up temp file
                 import os
+
                 if os.path.exists(temp_img_path):
                     os.remove(temp_img_path)
 
