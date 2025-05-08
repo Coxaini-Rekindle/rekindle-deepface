@@ -97,11 +97,11 @@ def recognize_faces():
         group_id = data["group_id"]
         images = data["images"]
 
+        # Get group directory through storage_manager
+        group_dir = face_service.storage_manager.get_group_dir(group_id)
+        
         # Check if model exists
-        group_dir = face_service.get_group_dir(group_id)
-        import os
-
-        if not os.path.exists(group_dir) or not os.listdir(group_dir):
+        if not face_service.storage_manager.group_exists(group_id):
             return (
                 jsonify({"error": f"No trained model found for group_id: {group_id}"}),
                 404,
@@ -115,7 +115,7 @@ def recognize_faces():
             try:
                 # Recognize faces in the image
                 success, face_results = face_service.recognize_faces(
-                    temp_img_path, group_dir
+                    temp_img_path, group_id
                 )
 
                 if success:
@@ -133,6 +133,7 @@ def recognize_faces():
 
             finally:
                 # Clean up temp file
+                import os
                 if os.path.exists(temp_img_path):
                     os.remove(temp_img_path)
 
