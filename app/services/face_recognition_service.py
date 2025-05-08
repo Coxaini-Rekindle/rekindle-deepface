@@ -44,79 +44,39 @@ class FaceRecognitionService:
 
     def _configure_gpu(self):
         """Configure TensorFlow to use GPU efficiently."""
+        print("Configuring GPU settings...")
+
+        # Check for CUDA environment variables
+        cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
+        if cuda_visible_devices is not None:
+            print(f"CUDA_VISIBLE_DEVICES is set to: {cuda_visible_devices}")
+
         # Check if GPU is available
         gpus = tf.config.list_physical_devices("GPU")
         if gpus:
             try:
+                # Print GPU info first
+                print(f"GPU acceleration enabled. Found {len(gpus)} GPU(s):")
+                for i, gpu in enumerate(gpus):
+                    print(f"  GPU {i}: {gpu.name}")
+
                 # Enable memory growth to avoid allocating all GPU memory at once
                 for gpu in gpus:
                     tf.config.experimental.set_memory_growth(gpu, True)
+                    print(f"  Memory growth enabled for {gpu.name}")
 
                 # Set visible devices and log GPU info
                 tf.config.set_visible_devices(gpus, "GPU")
-                print(f"GPU acceleration enabled. Found {len(gpus)} GPU(s)")
+                print("GPU devices set as visible to TensorFlow")
 
                 # Optional: Set TensorFlow to use mixed precision for faster computation
                 tf.keras.mixed_precision.set_global_policy("mixed_float16")
                 print("Mixed precision policy enabled")
+
             except RuntimeError as e:
                 print(f"GPU configuration error: {str(e)}")
         else:
             print("No GPU found. Using CPU.")
-
-            # Try to explain why GPU is not found
-            try:
-                import subprocess
-
-                result = subprocess.run(
-                    ["nvidia-smi"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                )
-                if result.returncode == 0:
-                    print("NVIDIA GPU detected by system but not by TensorFlow.")
-                    print(
-                        "This might be due to CUDA/cuDNN version mismatch with TensorFlow."
-                    )
-                    print("Output of nvidia-smi:")
-                    print(result.stdout)
-
-                    # Print TensorFlow build information
-                    print("\nTensorFlow build information:")
-                    print(f"TensorFlow version: {tf.__version__}")
-                    print(
-                        f"TensorFlow compiled with CUDA: {tf.test.is_built_with_cuda()}"
-                    )
-                    print(
-                        f"GPU devices visible to TensorFlow: {tf.config.list_physical_devices('GPU')}"
-                    )
-
-                    # Check CUDA environment variables
-                    cuda_path = os.environ.get("CUDA_PATH")
-                    if cuda_path:
-                        print(f"CUDA_PATH: {cuda_path}")
-                    else:
-                        print("CUDA_PATH environment variable not set")
-
-                    # Try to use tf.sysconfig to get compilation info
-                    try:
-                        import tensorflow.python.platform.build_info as build_info
-
-                        print("\nTensorFlow compilation info:")
-                        print(f"CUDA version: {build_info.build_info['cuda_version']}")
-                        print(
-                            f"cuDNN version: {build_info.build_info['cudnn_version']}"
-                        )
-                    except:
-                        print("Could not get TensorFlow build information")
-                else:
-                    print("NVIDIA driver not found or not working properly.")
-                    print("Make sure your NVIDIA drivers are properly installed.")
-                    print(f"Error: {result.stderr}")
-            except Exception as e:
-                print(f"Failed to check NVIDIA drivers: {str(e)}")
-                print("Make sure NVIDIA drivers are installed correctly.")
 
     def _preload_models(self):
         """Preload DeepFace models to improve subsequent inference speed."""
