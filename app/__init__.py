@@ -1,5 +1,9 @@
 import os
 
+# Set TensorFlow environment variables for GPU usage
+os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # Suppress TensorFlow logging except errors
+
 from flask import Flask, jsonify
 from flask_cors import CORS
 

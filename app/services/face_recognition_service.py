@@ -1,9 +1,12 @@
 import os
 import shutil
+import time
 import traceback
 import uuid
 
 import cv2
+import numpy as np
+import tensorflow as tf
 from deepface import DeepFace
 
 
@@ -21,9 +24,131 @@ class FaceRecognitionService:
         self.data_dir = data_dir
         self.models_dir = models_dir
 
+        # Performance settings - initialize these before calling configure_gpu and preload_models
+        self.detector_backend = (
+            "retinaface"  # Options: retinaface, mtcnn, opencv, ssd, dlib, mediapipe
+        )
+        self.recognition_model = "VGG-Face"  # Options: VGG-Face, Facenet, Facenet512, OpenFace, DeepFace, ArcFace
+        self.distance_metric = "cosine"  # Options: cosine, euclidean, euclidean_l2
+        self.confidence_threshold = 0.5  # Threshold for face recognition confidence
+
         # Create directories if they don't exist
         os.makedirs(data_dir, exist_ok=True)
         os.makedirs(models_dir, exist_ok=True)
+
+        # Configure TensorFlow to use GPU
+        self._configure_gpu()
+
+        # Pre-load DeepFace models
+        self._preload_models()
+
+    def _configure_gpu(self):
+        """Configure TensorFlow to use GPU efficiently."""
+        # Check if GPU is available
+        gpus = tf.config.list_physical_devices("GPU")
+        if gpus:
+            try:
+                # Enable memory growth to avoid allocating all GPU memory at once
+                for gpu in gpus:
+                    tf.config.experimental.set_memory_growth(gpu, True)
+
+                # Set visible devices and log GPU info
+                tf.config.set_visible_devices(gpus, "GPU")
+                print(f"GPU acceleration enabled. Found {len(gpus)} GPU(s)")
+
+                # Optional: Set TensorFlow to use mixed precision for faster computation
+                tf.keras.mixed_precision.set_global_policy("mixed_float16")
+                print("Mixed precision policy enabled")
+            except RuntimeError as e:
+                print(f"GPU configuration error: {str(e)}")
+        else:
+            print("No GPU found. Using CPU.")
+
+            # Try to explain why GPU is not found
+            try:
+                import subprocess
+
+                result = subprocess.run(
+                    ["nvidia-smi"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                if result.returncode == 0:
+                    print("NVIDIA GPU detected by system but not by TensorFlow.")
+                    print(
+                        "This might be due to CUDA/cuDNN version mismatch with TensorFlow."
+                    )
+                    print("Output of nvidia-smi:")
+                    print(result.stdout)
+
+                    # Print TensorFlow build information
+                    print("\nTensorFlow build information:")
+                    print(f"TensorFlow version: {tf.__version__}")
+                    print(
+                        f"TensorFlow compiled with CUDA: {tf.test.is_built_with_cuda()}"
+                    )
+                    print(
+                        f"GPU devices visible to TensorFlow: {tf.config.list_physical_devices('GPU')}"
+                    )
+
+                    # Check CUDA environment variables
+                    cuda_path = os.environ.get("CUDA_PATH")
+                    if cuda_path:
+                        print(f"CUDA_PATH: {cuda_path}")
+                    else:
+                        print("CUDA_PATH environment variable not set")
+
+                    # Try to use tf.sysconfig to get compilation info
+                    try:
+                        import tensorflow.python.platform.build_info as build_info
+
+                        print("\nTensorFlow compilation info:")
+                        print(f"CUDA version: {build_info.build_info['cuda_version']}")
+                        print(
+                            f"cuDNN version: {build_info.build_info['cudnn_version']}"
+                        )
+                    except:
+                        print("Could not get TensorFlow build information")
+                else:
+                    print("NVIDIA driver not found or not working properly.")
+                    print("Make sure your NVIDIA drivers are properly installed.")
+                    print(f"Error: {result.stderr}")
+            except Exception as e:
+                print(f"Failed to check NVIDIA drivers: {str(e)}")
+                print("Make sure NVIDIA drivers are installed correctly.")
+
+    def _preload_models(self):
+        """Preload DeepFace models to improve subsequent inference speed."""
+        print("Preloading face recognition models...")
+        try:
+            # Create a small dummy image to warm up the models
+            dummy_img = np.zeros((100, 100, 3), dtype=np.uint8)
+            dummy_path = os.path.join(self.data_dir, "dummy.jpg")
+            cv2.imwrite(dummy_path, dummy_img)
+
+            # Warm up the face detection model
+            _ = DeepFace.extract_faces(
+                img_path=dummy_path,
+                detector_backend=self.detector_backend,
+                enforce_detection=False,
+            )
+
+            # Warm up the face recognition model
+            _ = DeepFace.represent(
+                img_path=dummy_path,
+                model_name=self.recognition_model,
+                detector_backend=self.detector_backend,
+                enforce_detection=False,
+            )
+
+            # Clean up
+            if os.path.exists(dummy_path):
+                os.remove(dummy_path)
+
+            print("Models preloaded successfully")
+        except Exception as e:
+            print(f"Error preloading models: {str(e)}")
 
     def get_group_dir(self, group_id):
         """Get the directory path for a group."""
@@ -47,18 +172,43 @@ class FaceRecognitionService:
             tuple: (success, result_data or error_info)
         """
         try:
+            start_time = time.time()
+            print(f"Starting face extraction for image: {temp_img_path}")
+
             # Get the group directory
             group_dir = self.get_group_dir(group_id)
 
             # Ensure the group directory exists
             os.makedirs(group_dir, exist_ok=True)
 
+            # Read image once and pass the img object to DeepFace to avoid repeated disk I/O
+            img = cv2.imread(temp_img_path)
+            if img is None:
+                return False, "Failed to read image"
+
+            # Optimize image size if too large
+            max_dim = 1280  # Maximum dimension for processing
+            h, w = img.shape[:2]
+            if max(h, w) > max_dim:
+                scale = max_dim / max(h, w)
+                img = cv2.resize(img, (int(w * scale), int(h * scale)))
+                # Save the resized image
+                cv2.imwrite(temp_img_path, img)
+                print(
+                    f"Resized image from {w}x{h} to {int(w * scale)}x{int(h * scale)}"
+                )
+
             # Detect faces in the image using DeepFace
             face_objs = DeepFace.extract_faces(
-                img_path=temp_img_path,
-                detector_backend="retinaface",
+                img_path=img,  # Pass image object directly
+                detector_backend=self.detector_backend,
                 enforce_detection=False,
                 align=True,
+            )
+
+            face_detection_time = time.time()
+            print(
+                f"Face detection completed in {face_detection_time - start_time:.2f} seconds. Found {len(face_objs)} faces."
             )
 
             if not face_objs:
@@ -66,6 +216,8 @@ class FaceRecognitionService:
 
             # Process each detected face
             results = []
+            face_paths = []  # Keep track of face paths for batch processing
+
             for i, face_obj in enumerate(face_objs):
                 try:
                     # Get face region and confidence
@@ -79,97 +231,14 @@ class FaceRecognitionService:
                     w = facial_area.get("w", 0)
                     h = facial_area.get("h", 0)
 
-                    # Extract the face from the image
-                    img = cv2.imread(temp_img_path)
+                    # Extract the face from the image (using the already loaded image)
                     detected_face = img[y : y + h, x : x + w]
 
                     # Save face to a temporary file
                     face_filename = f"face_{i}_{uuid.uuid4()}.jpg"
                     face_path = os.path.join(self.data_dir, face_filename)
                     cv2.imwrite(face_path, detected_face)
-
-                    # Try to recognize this face if the group has trained data
-                    if os.path.exists(group_dir) and os.listdir(group_dir):
-                        success, face_result = self.recognize_faces(
-                            face_path, group_dir
-                        )
-
-                        if success and face_result and len(face_result) > 0:
-                            face_info = face_result[0]  # Get the first result
-
-                            if (
-                                not face_info.get("is_new_person", True)
-                                and face_info.get("confidence", 0) >= 0.5
-                            ):
-                                # Face recognized with high confidence
-                                person_id = face_info.get("person_id")
-                                person_dir = self.get_person_dir(group_id, person_id)
-                                os.makedirs(person_dir, exist_ok=True)
-
-                                # Save face to the person's directory
-                                new_face_path = os.path.join(
-                                    person_dir, f"{uuid.uuid4()}.jpg"
-                                )
-                                cv2.imwrite(new_face_path, detected_face)
-
-                                # Add to results
-                                results.append(
-                                    {
-                                        "face_index": i,
-                                        "person_id": person_id,
-                                        "is_new_person": False,
-                                        "confidence": face_info.get("confidence", 0),
-                                        "saved_to": new_face_path,
-                                    }
-                                )
-                            else:
-                                # Face not recognized with high confidence - create new person
-                                new_person_id = f"person_{uuid.uuid4()}"
-                                new_person_dir = self.get_person_dir(
-                                    group_id, new_person_id
-                                )
-                                os.makedirs(new_person_dir, exist_ok=True)
-
-                                # Save face to the new person's directory
-                                new_face_path = os.path.join(
-                                    new_person_dir, f"{uuid.uuid4()}.jpg"
-                                )
-                                cv2.imwrite(new_face_path, detected_face)
-
-                                # Add to results
-                                results.append(
-                                    {
-                                        "face_index": i,
-                                        "person_id": new_person_id,
-                                        "is_new_person": True,
-                                        "saved_to": new_face_path,
-                                    }
-                                )
-                    else:
-                        # No existing model - create new person
-                        new_person_id = f"person_{uuid.uuid4()}"
-                        new_person_dir = self.get_person_dir(group_id, new_person_id)
-                        os.makedirs(new_person_dir, exist_ok=True)
-
-                        # Save face to the new person's directory
-                        new_face_path = os.path.join(
-                            new_person_dir, f"{uuid.uuid4()}.jpg"
-                        )
-                        cv2.imwrite(new_face_path, detected_face)
-
-                        # Add to results
-                        results.append(
-                            {
-                                "face_index": i,
-                                "person_id": new_person_id,
-                                "is_new_person": True,
-                                "saved_to": new_face_path,
-                            }
-                        )
-
-                    # Clean up temporary face file
-                    if os.path.exists(face_path):
-                        os.remove(face_path)
+                    face_paths.append(face_path)
 
                 except Exception as e:
                     # Log error for this face but continue processing other faces
@@ -182,7 +251,105 @@ class FaceRecognitionService:
                         }
                     )
 
+            # Check if model exists before attempting recognition
+            has_trained_model = os.path.exists(group_dir) and os.listdir(group_dir)
+
+            # Batch process faces for recognition if trained model exists
+            if has_trained_model and face_paths:
+                # Process all faces at once if possible
+                batch_time_start = time.time()
+
+                for i, face_path in enumerate(face_paths):
+                    # Recognize faces in the image
+                    success, face_result = self.recognize_faces(face_path, group_dir)
+
+                    if success and face_result and len(face_result) > 0:
+                        face_info = face_result[0]  # Get the first result
+
+                        if (
+                            not face_info.get("is_new_person", True)
+                            and face_info.get("confidence", 0)
+                            >= self.confidence_threshold
+                        ):
+                            # Face recognized with high confidence
+                            person_id = face_info.get("person_id")
+                            person_dir = self.get_person_dir(group_id, person_id)
+                            os.makedirs(person_dir, exist_ok=True)
+
+                            # Save face to the person's directory
+                            new_face_path = os.path.join(
+                                person_dir, f"{uuid.uuid4()}.jpg"
+                            )
+                            # Use the already extracted face
+                            cv2.imwrite(new_face_path, cv2.imread(face_path))
+
+                            # Add to results
+                            results.append(
+                                {
+                                    "face_index": i,
+                                    "person_id": person_id,
+                                    "is_new_person": False,
+                                    "confidence": face_info.get("confidence", 0),
+                                    "saved_to": new_face_path,
+                                }
+                            )
+                        else:
+                            # Face not recognized with high confidence - create new person
+                            new_person_id = f"person_{uuid.uuid4()}"
+                            new_person_dir = self.get_person_dir(
+                                group_id, new_person_id
+                            )
+                            os.makedirs(new_person_dir, exist_ok=True)
+
+                            # Save face to the new person's directory
+                            new_face_path = os.path.join(
+                                new_person_dir, f"{uuid.uuid4()}.jpg"
+                            )
+                            # Use the already extracted face
+                            cv2.imwrite(new_face_path, cv2.imread(face_path))
+
+                            # Add to results
+                            results.append(
+                                {
+                                    "face_index": i,
+                                    "person_id": new_person_id,
+                                    "is_new_person": True,
+                                    "saved_to": new_face_path,
+                                }
+                            )
+
+                print(
+                    f"Batch face recognition completed in {time.time() - batch_time_start:.2f} seconds"
+                )
+            else:
+                # No existing model - create new person for each face
+                for i, face_path in enumerate(face_paths):
+                    new_person_id = f"person_{uuid.uuid4()}"
+                    new_person_dir = self.get_person_dir(group_id, new_person_id)
+                    os.makedirs(new_person_dir, exist_ok=True)
+
+                    # Save face to the new person's directory
+                    new_face_path = os.path.join(new_person_dir, f"{uuid.uuid4()}.jpg")
+                    # Use the already extracted face
+                    cv2.imwrite(new_face_path, cv2.imread(face_path))
+
+                    # Add to results
+                    results.append(
+                        {
+                            "face_index": i,
+                            "person_id": new_person_id,
+                            "is_new_person": True,
+                            "saved_to": new_face_path,
+                        }
+                    )
+
+            # Clean up temporary face files
+            for face_path in face_paths:
+                if os.path.exists(face_path):
+                    os.remove(face_path)
+
             # Update the model after processing all faces
+            model_update_time = time.time()
             if results:
                 # Use first successful face path as sample for retraining
                 sample_paths = []
@@ -195,15 +362,30 @@ class FaceRecognitionService:
                     _ = DeepFace.find(
                         img_path=sample_paths[0],
                         db_path=group_dir,
-                        model_name="VGG-Face",
-                        detector_backend="retinaface",
+                        model_name=self.recognition_model,
+                        detector_backend=self.detector_backend,
                         enforce_detection=False,
                         align=True,
                         normalization="base",
                         silent=True,
                     )
+                    print(
+                        f"Model updated in {time.time() - model_update_time:.2f} seconds"
+                    )
 
-            return True, results
+            total_time = time.time() - start_time
+            print(f"Total processing time: {total_time:.2f} seconds")
+
+            # Add timing information to results
+            timing_info = {
+                "total_processing_time": total_time,
+                "face_detection_time": face_detection_time - start_time,
+                "model_update_time": (
+                    time.time() - model_update_time if results and sample_paths else 0
+                ),
+            }
+
+            return True, {"results": results, "timing": timing_info}
 
         except Exception as e:
             error_trace = traceback.format_exc()
@@ -221,16 +403,21 @@ class FaceRecognitionService:
             tuple: (success, face_results or error_info)
         """
         try:
-            # Find faces in the image
+            start_time = time.time()
+
+            # Find faces in the image with optimized parameters
             matches = DeepFace.find(
                 img_path=temp_img_path,
                 db_path=group_dir,
-                model_name="VGG-Face",
-                detector_backend="retinaface",
-                distance_metric="cosine",
+                model_name=self.recognition_model,
+                detector_backend=self.detector_backend,
+                distance_metric=self.distance_metric,
                 enforce_detection=False,
                 silent=True,
             )
+
+            recognition_time = time.time() - start_time
+            print(f"Face recognition completed in {recognition_time:.2f} seconds")
 
             # Process matches
             face_results = []
@@ -249,9 +436,14 @@ class FaceRecognitionService:
                         distance_column = None
 
                         # Try both column name formats
-                        if "VGG-Face_cosine" in best_match:
-                            distance_column = "VGG-Face_cosine"
-                            distance_value = best_match["VGG-Face_cosine"]
+                        if (
+                            f"{self.recognition_model}_{self.distance_metric}"
+                            in best_match
+                        ):
+                            distance_column = (
+                                f"{self.recognition_model}_{self.distance_metric}"
+                            )
+                            distance_value = best_match[distance_column]
                         elif "distance" in best_match:
                             distance_column = "distance"
                             distance_value = best_match["distance"]
@@ -262,7 +454,9 @@ class FaceRecognitionService:
                                 1 - distance_value
                             )  # Convert distance to confidence score
 
-                            if confidence >= 0.5:  # Threshold for recognition
+                            if (
+                                confidence >= self.confidence_threshold
+                            ):  # Threshold for recognition
                                 face_results.append(
                                     {
                                         "person_id": person_id,
@@ -270,6 +464,7 @@ class FaceRecognitionService:
                                         "is_new_person": False,
                                         "distance_metric": distance_column,
                                         "distance_value": float(distance_value),
+                                        "recognition_time_seconds": recognition_time,
                                     }
                                 )
                             else:
@@ -282,6 +477,7 @@ class FaceRecognitionService:
                                         "distance_metric": distance_column,
                                         "distance_value": float(distance_value),
                                         "closest_match": person_id,
+                                        "recognition_time_seconds": recognition_time,
                                     }
                                 )
                         else:
@@ -294,6 +490,7 @@ class FaceRecognitionService:
                                     "is_new_person": False,
                                     "uncertain": True,
                                     "error": f"Distance metric column not found. Available columns: {columns}",
+                                    "recognition_time_seconds": recognition_time,
                                 }
                             )
                     else:
@@ -304,6 +501,7 @@ class FaceRecognitionService:
                                 "confidence": 0.0,
                                 "is_new_person": True,
                                 "error": "No matches found in database",
+                                "recognition_time_seconds": recognition_time,
                             }
                         )
 
@@ -314,6 +512,7 @@ class FaceRecognitionService:
                         "confidence": 0.0,
                         "is_new_person": True,
                         "error": "No face detected or no matches found in database",
+                        "recognition_time_seconds": recognition_time,
                     }
                 )
 
@@ -345,3 +544,43 @@ class FaceRecognitionService:
             return True, f"Group {group_id} deleted successfully"
         except Exception as e:
             return False, str(e)
+
+    def set_performance_mode(self, mode="balanced"):
+        """
+        Configure performance settings based on predefined modes.
+
+        Args:
+            mode (str): Performance mode - one of:
+                - 'speed': Prioritize speed over accuracy
+                - 'accuracy': Prioritize accuracy over speed
+                - 'balanced': Balance between speed and accuracy
+                - 'gpu_optimized': Settings optimized for GPU processing
+
+        Returns:
+            dict: The current performance settings
+        """
+        if mode == "speed":
+            self.detector_backend = "ssd"  # Faster but less accurate
+            self.recognition_model = "VGG-Face"  # Good balance
+            self.confidence_threshold = 0.4  # Lower threshold for faster matching
+        elif mode == "accuracy":
+            self.detector_backend = "retinaface"  # More accurate
+            self.recognition_model = "ArcFace"  # More accurate
+            self.confidence_threshold = 0.6  # Higher threshold for higher accuracy
+        elif mode == "balanced":
+            self.detector_backend = "retinaface"
+            self.recognition_model = "VGG-Face"
+            self.confidence_threshold = 0.5
+        elif mode == "gpu_optimized":
+            self.detector_backend = "retinaface"
+            self.recognition_model = "VGG-Face"
+            self.confidence_threshold = 0.5
+            # Preload models again with the new settings
+            self._preload_models()
+
+        return {
+            "mode": mode,
+            "detector_backend": self.detector_backend,
+            "recognition_model": self.recognition_model,
+            "confidence_threshold": self.confidence_threshold,
+        }

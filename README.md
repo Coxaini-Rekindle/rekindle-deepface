@@ -8,6 +8,7 @@ A Python Flask server that provides face recognition capabilities using the Deep
 - Recognize faces in images
 - Add new people to existing models
 - Delete groups and their data
+- GPU-accelerated face recognition with RTX support
 
 ## Installation
 
@@ -23,6 +24,9 @@ A Python Flask server that provides face recognition capabilities using the Deep
    ```
    pip install -r requirements.txt
    ```
+5. For GPU acceleration (recommended):
+   - Make sure you have the latest NVIDIA drivers installed
+   - Install CUDA Toolkit and cuDNN compatible with your TensorFlow version
 
 ## Usage
 
@@ -107,6 +111,32 @@ Content-Type: application/json
 }
 ```
 
+#### Set Performance Mode
+
+```
+POST /api/set_performance
+Content-Type: application/json
+
+{
+    "mode": "gpu_optimized"
+}
+```
+
+Available modes:
+- `speed`: Prioritize speed over accuracy
+- `accuracy`: Prioritize accuracy over speed
+- `balanced`: Balance between speed and accuracy
+- `gpu_optimized`: Settings optimized for GPU processing (default)
+
+## Performance Optimization
+
+The service is optimized for NVIDIA GPUs and includes:
+- Automatic GPU detection and configuration
+- Mixed precision training for faster processing
+- Model preloading to reduce inference time
+- Image resizing to optimize memory usage
+- Configurable detector backends and recognition models
+
 ## Testing
 
 A test script is provided to verify API functionality:
@@ -128,6 +158,7 @@ python test_api.py --action delete --group_id test_group
 
 ## Notes
 
-- The server uses the VGG-Face model and RetinaFace detection backend
-- Face recognition threshold is set to 0.6 (configurable in code)
+- The server uses RTX GPU acceleration when available
+- Default face recognition model is VGG-Face with RetinaFace detection
+- Face recognition threshold is configurable via the API
 - All images are processed as base64 encoded strings

@@ -11,6 +11,9 @@ DATA_DIR = "data"
 MODELS_DIR = "models"
 face_service = FaceRecognitionService(DATA_DIR, MODELS_DIR)
 
+# Set the GPU-optimized mode by default
+face_service.set_performance_mode("gpu_optimized")
+
 
 @api_bp.route("/process_faces", methods=["POST"])
 def process_faces():
@@ -160,6 +163,48 @@ def delete_group():
             return jsonify({"status": "success", "message": message})
         else:
             return jsonify({"error": message}), 404
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/set_performance", methods=["POST"])
+def set_performance():
+    """
+    Set the performance mode for the face recognition service.
+
+    Request JSON format:
+    {
+        "mode": "one of: speed, accuracy, balanced, gpu_optimized"
+    }
+    """
+    try:
+        data = request.json
+
+        if not data or "mode" not in data:
+            return jsonify({"error": "Missing mode parameter"}), 400
+
+        mode = data["mode"]
+        valid_modes = ["speed", "accuracy", "balanced", "gpu_optimized"]
+
+        if mode not in valid_modes:
+            return (
+                jsonify(
+                    {"error": f"Invalid mode. Must be one of: {', '.join(valid_modes)}"}
+                ),
+                400,
+            )
+
+        # Apply the new performance mode
+        settings = face_service.set_performance_mode(mode)
+
+        return jsonify(
+            {
+                "status": "success",
+                "message": f"Performance mode set to: {mode}",
+                "settings": settings,
+            }
+        )
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
