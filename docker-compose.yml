@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  deepface-api:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+      # Enable BuildKit for better caching
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+    image: deepface-recognition:latest
+    container_name: deepface-recognition-service
+    ports:
+      - "5000:5000"
+    volumes:
+      # Persist data and models outside the container
+      - ./data:/app/data
+      - ./models:/app/models
+      # Cache pip dependencies on host to speed up rebuilds
+      - pip-cache:/root/.cache/pip
+    environment:
+      - TF_FORCE_GPU_ALLOW_GROWTH=true
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - FLASK_ENV=production
+    restart: unless-stopped
+    # Enable GPU support if NVIDIA Docker runtime is available
+    # Uncomment the following lines if you have NVIDIA Docker setup
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+
+volumes:
+  deepface_data:
+  deepface_models:
+  pip-cache:
