@@ -1,3 +1,22 @@
+"""
+Face Recognition API Routes
+
+This module provides REST API endpoints for face recognition operations with support for
+temporary user management and merging workflows.
+
+API Workflow:
+1. Use POST /api/add_faces to add faces to a group
+   - Recognized faces are associated with existing users
+   - Unrecognized faces get temporary user IDs (prefixed with "temp_")
+2. Use GET /api/groups/{group_id}/users to list all users (permanent and temporary)
+3. Use POST /api/merge_users to merge temporary users with existing ones
+4. Use POST /api/recognize to recognize faces in new images
+5. Use DELETE /api/delete_group to remove groups and all associated data
+6. Use POST /api/set_performance to adjust performance settings
+
+All endpoints accept and return JSON data.
+"""
+
 from flask import Blueprint, jsonify, request
 
 from app.services.face_recognition_service import FaceRecognitionService
@@ -15,17 +34,52 @@ face_service = FaceRecognitionService(DATA_DIR, MODELS_DIR)
 face_service.set_performance_mode("gpu_optimized")
 
 
-@api_bp.route("/process_faces", methods=["POST"])
-def process_faces():
+@api_bp.route("/add_faces", methods=["POST"])
+def add_faces():
     """
-    Extract faces from an image, recognize them, and save to appropriate folders.
-    If a face is recognized with high confidence, save it to that person's folder.
-    If not recognized, create a new unique ID and save to a new folder.
+    Add faces from an image to a group. Try to recognize existing faces,
+    create temporary users for unrecognized faces.
 
     Request JSON format:
     {
         "group_id": "unique_group_identifier",
         "image": "base64_encoded_image"
+    }
+
+    Response JSON format (success):
+    {
+        "status": "success",
+        "group_id": "example_group",
+        "faces": [
+            {
+                "face_index": 0,
+                "person_id": "person_12345678-1234-1234-1234-123456789abc",
+                "is_temp_user": false,
+                "is_new_person": false,
+                "confidence": 0.85,
+                "recognition_type": "recognized",
+                "saved_to": "/path/to/saved/image.jpg"
+            },
+            {
+                "face_index": 1,
+                "person_id": "temp_98765432-4321-4321-4321-cba987654321",
+                "is_temp_user": true,
+                "is_new_person": true,
+                "confidence": 0.0,
+                "recognition_type": "temp_user",
+                "saved_to": "/path/to/saved/temp_image.jpg"
+            }
+        ],
+        "timing": {
+            "total_processing_time": 2.45,
+            "face_detection_time": 0.32
+        }
+    }
+
+    Response JSON format (error):
+    {
+        "error": "Error message describing what went wrong",
+        "trace": "Optional stack trace for debugging"
     }
     """
     try:
@@ -42,14 +96,10 @@ def process_faces():
 
         try:
             # Process faces in the image
-            success, results = face_service.extract_and_handle_faces(
-                temp_img_path, group_id
-            )
+            success, results = face_service.add_faces_to_group(temp_img_path, group_id)
 
             if success:
-                return jsonify(
-                    {"status": "success", "group_id": group_id, "faces": results}
-                )
+                return jsonify({"status": "success", "group_id": group_id, **results})
             else:
                 return jsonify({"error": results}), 500
 
@@ -73,6 +123,148 @@ def process_faces():
         return jsonify({"error": str(e), "trace": error_trace}), 500
 
 
+@api_bp.route("/merge_users", methods=["POST"])
+def merge_users():
+    """
+    Merge multiple users into a target user.
+
+    Request JSON format:
+    {
+        "group_id": "unique_group_identifier",
+        "source_person_ids": ["temp_12345", "temp_67890"],
+        "target_person_id": "person_abcdef123456"
+    }
+
+    Response JSON format (success):
+    {
+        "status": "success",
+        "group_id": "example_group",
+        "merged_count": 2,
+        "target_person_id": "person_abcdef123456",
+        "source_person_ids": ["temp_12345", "temp_67890"],
+        "message": "Successfully merged 2 users into person_abcdef123456"
+    }
+
+    Response JSON format (error):
+    {
+        "error": "Error message describing what went wrong"
+    }
+    """
+    try:
+        data = request.json
+
+        if (
+            not data
+            or "group_id" not in data
+            or "source_person_ids" not in data
+            or "target_person_id" not in data
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": "Missing required parameters: group_id, source_person_ids, target_person_id"
+                    }
+                ),
+                400,
+            )
+
+        group_id = data["group_id"]
+        source_person_ids = data["source_person_ids"]
+        target_person_id = data["target_person_id"]
+
+        # Validate inputs
+        if not isinstance(source_person_ids, list) or len(source_person_ids) == 0:
+            return jsonify({"error": "source_person_ids must be a non-empty list"}), 400
+
+        # Merge users
+        success, message, merged_info = face_service.merge_users(
+            group_id, source_person_ids, target_person_id
+        )
+
+        if success:
+            return jsonify(
+                {
+                    "status": "success",
+                    "group_id": group_id,
+                    "merged_count": len(source_person_ids),
+                    "target_person_id": target_person_id,
+                    "source_person_ids": source_person_ids,
+                    "message": message,
+                    **merged_info,
+                }
+            )
+        else:
+            return jsonify({"error": message}), 400
+
+    except Exception as e:
+        import traceback
+
+        error_trace = traceback.format_exc()
+        return jsonify({"error": str(e), "trace": error_trace}), 500
+
+
+@api_bp.route("/groups/<group_id>/users", methods=["GET"])
+def list_users_in_group(group_id):
+    """
+    List all users in a group.
+
+    Response JSON format (success):
+    {
+        "status": "success",
+        "group_id": "example_group",
+        "users": {
+            "permanent": [
+                {
+                    "person_id": "person_12345678-1234-1234-1234-123456789abc",
+                    "face_count": 5,
+                    "metadata": {
+                        "created_at": "2025-06-08T10:30:00",
+                        "recognition_type": "recognized",
+                        "confidence": 0.85
+                    }
+                }
+            ],
+            "temporary": [
+                {
+                    "person_id": "temp_98765432-4321-4321-4321-cba987654321",
+                    "face_count": 2,
+                    "metadata": {
+                        "created_at": "2025-06-08T11:15:00",
+                        "recognition_type": "temp_user",
+                        "confidence": 0.0
+                    }
+                }
+            ]
+        },
+        "summary": {
+            "total_users": 2,
+            "permanent_users": 1,
+            "temporary_users": 1
+        }
+    }
+
+    Response JSON format (error):
+    {
+        "error": "Error message describing what went wrong"
+    }
+    """
+    try:
+        # Check if group exists
+        if not face_service.storage_manager.group_exists(group_id):
+            return jsonify({"error": f"Group '{group_id}' does not exist"}), 404
+
+        # Get users in group
+        users_info = face_service.list_users_in_group(group_id)
+
+        return jsonify({"status": "success", "group_id": group_id, **users_info})
+
+    except Exception as e:
+        import traceback
+
+        error_trace = traceback.format_exc()
+        return jsonify({"error": str(e), "trace": error_trace}), 500
+
+
 @api_bp.route("/recognize", methods=["POST"])
 def recognize_faces():
     """
@@ -83,10 +275,40 @@ def recognize_faces():
         "group_id": "unique_group_identifier",
         "images": [
             "base64_encoded_image1",
-            "base64_encoded_image2",
-            ...
+            "base64_encoded_image2"
         ]
     }
+
+    Response JSON format (success):
+    {
+        "status": "success",
+        "group_id": "example_group",
+        "results": [
+            {
+                "image_index": 0,
+                "faces": [
+                    {
+                        "person_id": "person_12345678-1234-1234-1234-123456789abc",
+                        "confidence": 0.85,
+                        "facial_area": {
+                            "x": 100,
+                            "y": 50,
+                            "w": 200,
+                            "h": 250
+                        }
+                    }
+                ]
+            },
+            {
+                "image_index": 1,
+                "error": "No faces detected in the image"
+            }
+        ]
+    }
+
+    Response JSON format (error):
+    {
+        "error": "Error message describing what went wrong"    }
     """
     try:
         data = request.json
@@ -96,9 +318,6 @@ def recognize_faces():
 
         group_id = data["group_id"]
         images = data["images"]
-
-        # Get group directory through storage_manager
-        group_dir = face_service.storage_manager.get_group_dir(group_id)
 
         # Check if model exists
         if not face_service.storage_manager.group_exists(group_id):
@@ -149,7 +368,25 @@ def recognize_faces():
 
 @api_bp.route("/delete_group", methods=["DELETE"])
 def delete_group():
-    """Delete a group and all its associated data."""
+    """
+    Delete a group and all its associated data.
+
+    Request JSON format:
+    {
+        "group_id": "unique_group_identifier"
+    }
+
+    Response JSON format (success):
+    {
+        "status": "success",
+        "message": "Group 'example_group' and all associated data deleted successfully"
+    }
+
+    Response JSON format (error):
+    {
+        "error": "Error message describing what went wrong"
+    }
+    """
     try:
         data = request.json
 
@@ -177,7 +414,30 @@ def set_performance():
 
     Request JSON format:
     {
-        "mode": "one of: speed, accuracy, balanced, gpu_optimized"
+        "mode": "balanced"
+    }
+
+    Valid modes:
+    - "speed": Prioritize speed over accuracy
+    - "accuracy": Prioritize accuracy over speed
+    - "balanced": Balance between speed and accuracy
+    - "gpu_optimized": Settings optimized for GPU processing
+
+    Response JSON format (success):
+    {
+        "status": "success",
+        "message": "Performance mode set to: balanced",
+        "settings": {
+            "detector_backend": "retinaface",
+            "recognition_model": "VGG-Face",
+            "distance_metric": "cosine",
+            "confidence_threshold": 0.7
+        }
+    }
+
+    Response JSON format (error):
+    {
+        "error": "Error message describing what went wrong"
     }
     """
     try:

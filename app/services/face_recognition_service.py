@@ -221,9 +221,9 @@ class FaceRecognitionService:
                     )
 
             # Clean up temporary face files
-            self.storage_manager.cleanup_temp_files(face_paths)
-
-            # Update the model after processing all faces
+            self.storage_manager.cleanup_temp_files(
+                face_paths
+            )  # Update the model after processing all faces
             model_update_time = time.time()
             if results:
                 # Use first successful face path as sample for retraining
@@ -231,12 +231,9 @@ class FaceRecognitionService:
                 for result in results:
                     if "saved_to" in result:
                         sample_paths.append(result["saved_to"])
-
                 if sample_paths:
                     # Update the model
-                    model_updated = self.face_recognizer.update_model(
-                        sample_paths[0], group_dir
-                    )
+                    self.face_recognizer.update_model(sample_paths[0], group_dir)
                     model_update_time = time.time() - model_update_time
                     print(f"Model updated in {model_update_time:.2f} seconds")
 
@@ -334,3 +331,252 @@ class FaceRecognitionService:
             self._preload_models()
 
         return settings
+
+    def add_faces_to_group(self, temp_img_path, group_id):
+        """
+        Add faces from an image to a group. Try to recognize existing faces,
+        create temp users for unrecognized faces.
+
+        Args:
+            temp_img_path (str): Path to the temporary image file
+            group_id (str): Group identifier
+
+        Returns:
+            tuple: (success, result_data or error_info)
+        """
+        try:
+            start_time = time.time()
+            print(f"Starting face addition for image: {temp_img_path}")
+
+            # Get the group directory
+            group_dir = self.storage_manager.get_group_dir(group_id)
+
+            # Ensure the group directory exists
+            os.makedirs(group_dir, exist_ok=True)
+
+            # Read image once
+            img = cv2.imread(temp_img_path)
+            if img is None:
+                return False, "Failed to read image"
+
+            # Optimize image size if too large
+            img, was_resized, original_shape, new_shape = (
+                self.image_processor.optimize_image_size(
+                    img, max_dim=self.config.max_image_dimension
+                )
+            )
+
+            if was_resized:
+                # Save the resized image
+                cv2.imwrite(temp_img_path, img)
+                print(
+                    f"Resized image from {original_shape[1]}x{original_shape[0]} to {new_shape[0]}x{new_shape[1]}"
+                )
+
+            # Detect faces in the image
+            face_objs, face_detection_time = self.face_detector.detect_faces(img)
+
+            if not face_objs:
+                return False, "No faces detected in the image"
+
+            # Process each detected face
+            results = []
+            face_paths = []  # Keep track of face paths for batch processing
+
+            for i, face_obj in enumerate(face_objs):
+                try:
+                    # Get face region and confidence
+                    facial_area = face_obj.get("facial_area", {})
+                    if not facial_area:
+                        continue
+
+                    # Extract the face from the image
+                    detected_face = self.image_processor.extract_face(img, facial_area)
+
+                    # Save face to a temporary file
+                    face_path = self.storage_manager.save_temp_face(detected_face)
+                    face_paths.append((i, face_path, detected_face))
+
+                except Exception as e:
+                    # Log error for this face but continue processing other faces
+                    print(f"Error processing face {i}: {str(e)}")
+                    results.append(
+                        {
+                            "face_index": i,
+                            "error": str(e),
+                            "trace": traceback.format_exc(),
+                        }
+                    )
+
+            # Check if model exists before attempting recognition
+            has_trained_model = self.storage_manager.group_exists(group_id)
+
+            # Process faces for recognition if trained model exists
+            if has_trained_model and face_paths:
+                batch_time_start = time.time()
+
+                for i, face_path, detected_face in face_paths:
+                    # Recognize faces in the image
+                    success, face_result, _ = self.face_recognizer.recognize_face(
+                        face_path, group_dir
+                    )
+
+                    person_id = None
+                    is_new_person = True
+                    confidence = 0.0
+                    recognition_type = "unknown"
+
+                    if success and face_result and len(face_result) > 0:
+                        face_info = face_result[0]  # Get the first result
+
+                        if (
+                            not face_info.get("is_new_person", True)
+                            and face_info.get("confidence", 0)
+                            >= self.config.confidence_threshold
+                        ):
+                            # Face recognized with high confidence
+                            person_id = face_info.get("person_id")
+                            is_new_person = False
+                            confidence = face_info.get("confidence", 0)
+                            recognition_type = "recognized"
+                        else:
+                            # Face not recognized with high confidence - create temp user
+                            person_id = self.storage_manager.create_temp_user_id()
+                            is_new_person = True
+                            confidence = face_info.get("confidence", 0)
+                            recognition_type = "temp_user"
+                    else:
+                        # No recognition results - create temp user
+                        person_id = self.storage_manager.create_temp_user_id()
+                        is_new_person = True
+                        recognition_type = "temp_user"
+
+                    # Save face image
+                    new_face_path = self.storage_manager.save_face_image(
+                        detected_face, group_id, person_id
+                    )
+
+                    # Save metadata for the user
+                    from datetime import datetime
+
+                    metadata = {
+                        "created_at": datetime.now().isoformat(),
+                        "recognition_type": recognition_type,
+                        "confidence": confidence,
+                        "source_image": os.path.basename(temp_img_path),
+                    }
+                    self.storage_manager.save_user_metadata(
+                        group_id, person_id, metadata
+                    )
+
+                    # Add to results
+                    results.append(
+                        {
+                            "face_index": i,
+                            "person_id": person_id,
+                            "is_temp_user": self.storage_manager.is_temp_user(
+                                person_id
+                            ),
+                            "is_new_person": is_new_person,
+                            "confidence": confidence,
+                            "recognition_type": recognition_type,
+                            "saved_to": new_face_path,
+                        }
+                    )
+
+                print(
+                    f"Batch face processing completed in {time.time() - batch_time_start:.2f} seconds"
+                )
+            else:
+                # No existing model - create temp user for each face
+                for i, face_path, detected_face in face_paths:
+                    person_id = self.storage_manager.create_temp_user_id()
+                    new_face_path = self.storage_manager.save_face_image(
+                        detected_face, group_id, person_id
+                    )
+
+                    # Save metadata for the user
+                    from datetime import datetime
+
+                    metadata = {
+                        "created_at": datetime.now().isoformat(),
+                        "recognition_type": "temp_user",
+                        "confidence": 0.0,
+                        "source_image": os.path.basename(temp_img_path),
+                    }
+                    self.storage_manager.save_user_metadata(
+                        group_id, person_id, metadata
+                    )
+
+                    # Add to results
+                    results.append(
+                        {
+                            "face_index": i,
+                            "person_id": person_id,
+                            "is_temp_user": True,
+                            "is_new_person": True,
+                            "confidence": 0.0,
+                            "recognition_type": "temp_user",
+                            "saved_to": new_face_path,
+                        }
+                    )
+
+            # Clean up temporary face files
+            temp_paths = [path for _, path, _ in face_paths]
+            self.storage_manager.cleanup_temp_files(temp_paths)
+
+            total_time = time.time() - start_time
+            print(f"Total processing time: {total_time:.2f} seconds")
+
+            # Add timing information to results
+            timing_info = {
+                "total_processing_time": total_time,
+                "face_detection_time": face_detection_time,
+            }
+
+            return True, {"faces": results, "timing": timing_info}
+
+        except Exception as e:
+            error_trace = traceback.format_exc()
+            return False, {"error": str(e), "trace": error_trace}
+
+    def merge_users(self, group_id, source_person_ids, target_person_id):
+        """
+        Merge multiple users into a target user.
+
+        Args:
+            group_id (str): Group identifier
+            source_person_ids (list): List of source person IDs to merge
+            target_person_id (str): Target person ID to merge into
+
+        Returns:
+            tuple: (success, message, merged_info)
+        """
+        return self.storage_manager.merge_users(
+            group_id, source_person_ids, target_person_id
+        )
+
+    def list_users_in_group(self, group_id):
+        """
+        List all users in a group.
+
+        Args:
+            group_id (str): Group identifier
+
+        Returns:
+            dict: Dictionary with user information including summary
+        """
+        users_data = self.storage_manager.list_users_in_group(group_id)
+
+        # Calculate summary
+        permanent_count = len(users_data.get("permanent", []))
+        temporary_count = len(users_data.get("temporary", []))
+        total_count = permanent_count + temporary_count
+
+        summary = {
+            "total_users": total_count,
+            "permanent_users": permanent_count,
+            "temporary_users": temporary_count,
+        }
+
+        return {"users": users_data, "summary": summary}

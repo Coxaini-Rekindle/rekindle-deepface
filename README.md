@@ -1,14 +1,24 @@
 # DeepFace Recognition Service
 
-A Python Flask server that provides face recognition capabilities using the DeepFace library.
+A Python Flask server that provides face recognition capabilities using the DeepFace library with support for temporary user management and merging workflows.
 
 ## Features
 
-- Train face recognition models for different groups
-- Recognize faces in images
-- Add new people to existing models
-- Delete groups and their data
-- GPU-accelerated face recognition with RTX support
+- **Temporary User Management**: Unrecognized faces get temporary IDs for later association
+- **User Merging**: Merge temporary users with existing permanent users
+- **Face Recognition**: Recognize faces with confidence scoring
+- **Group Management**: Organize users into separate groups
+- **GPU Acceleration**: RTX/CUDA support for fast processing
+- **Performance Modes**: Configurable speed vs accuracy settings
+
+## New Workflow
+
+1. **Add Faces**: Upload images to detect and recognize faces
+   - Recognized faces → Associated with existing users
+   - Unrecognized faces → Assigned temporary user IDs
+2. **Review Users**: List all permanent and temporary users in a group
+3. **Merge Users**: Associate temporary users with the correct permanent users
+4. **Recognize**: Use trained models to identify faces in new images
 
 ## Installation
 
@@ -48,26 +58,122 @@ The server will be available at `http://localhost:5000`.
 GET /healthcheck
 ```
 
-#### Train a Model
+#### Add Faces to Group (NEW!)
 
 ```
-POST /api/train
-Content-Type: application/json
+POST /api/add_faces
+```
 
+Add faces from an image to a group. Recognizes existing faces and creates temporary users for unrecognized ones.
+
+**Request:**
+```json
 {
-    "group_id": "your_group_id",
-    "faces": [
-        {
-            "person_id": "person1",
-            "image": "base64_encoded_image"
-        },
-        {
-            "person_id": "person2",
-            "image": "base64_encoded_image"
-        }
-    ]
+    "group_id": "office_team",
+    "image": "base64_encoded_image"
 }
 ```
+
+#### Merge Users (NEW!)
+
+```
+POST /api/merge_users
+```
+
+Merge temporary users with existing permanent users.
+
+**Request:**
+```json
+{
+    "group_id": "office_team",
+    "source_person_ids": ["temp_abc123", "temp_def456"],
+    "target_person_id": "person_john_doe"
+}
+```
+
+#### List Users in Group (NEW!)
+
+```
+GET /api/groups/{group_id}/users
+```
+
+List all permanent and temporary users in a group.
+
+#### Recognize Faces
+
+```
+POST /api/recognize
+```
+
+Recognize faces in images against a trained model.
+
+**Request:**
+```json
+{
+    "group_id": "office_team",
+    "images": ["base64_encoded_image1", "base64_encoded_image2"]
+}
+```
+
+#### Delete Group
+
+```
+DELETE /api/delete_group
+```
+
+Delete a group and all its associated data.
+
+**Request:**
+```json
+{
+    "group_id": "office_team"
+}
+```
+
+#### Set Performance Mode
+
+```
+POST /api/set_performance
+```
+
+Configure performance settings (speed, accuracy, balanced, gpu_optimized).
+
+**Request:**
+```json
+{
+    "mode": "balanced"
+}
+```
+
+### Migration from Old API
+
+The old `/api/process_faces` endpoint has been replaced with `/api/add_faces`. The new endpoint:
+- Supports temporary user creation for unrecognized faces
+- Provides detailed recognition information
+- Includes timing data for performance monitoring
+
+For detailed API documentation with request/response examples, see [API_DOCUMENTATION.md](API_DOCUMENTATION.md).
+
+## Example Workflow
+
+1. **Add faces to a group:**
+   ```bash
+   curl -X POST http://localhost:5000/api/add_faces \
+     -H "Content-Type: application/json" \
+     -d '{"group_id": "team1", "image": "base64_data..."}'
+   ```
+
+2. **List users to see temporary users:**
+   ```bash
+   curl http://localhost:5000/api/groups/team1/users
+   ```
+
+3. **Merge temporary user with existing person:**
+   ```bash
+   curl -X POST http://localhost:5000/api/merge_users \
+     -H "Content-Type: application/json" \
+     -d '{"group_id": "team1", "source_person_ids": ["temp_123"], "target_person_id": "person_john"}'
+   ```
 
 #### Recognize Faces
 

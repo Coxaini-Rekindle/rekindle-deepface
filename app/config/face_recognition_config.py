@@ -46,8 +46,8 @@ class FaceRecognitionConfig:
             self.confidence_threshold = 0.5
 
         return {
-            "mode": mode,
             "detector_backend": self.detector_backend,
             "recognition_model": self.recognition_model,
+            "distance_metric": self.distance_metric,
             "confidence_threshold": self.confidence_threshold,
         }
