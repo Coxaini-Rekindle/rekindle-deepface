@@ -77,8 +77,8 @@ Merge multiple users into a target user.
 ```json
 {
     "group_id": "unique_group_identifier",
-    "source_person_ids": ["temp_12345", "temp_67890"],
-    "target_person_id": "person_abcdef123456"
+    "source_person_ids": ["12345678-1234-1234-1234-123456789abc", "87654321-4321-4321-4321-cba987654321"],
+    "target_person_id": "abcdef12-3456-7890-abcd-ef1234567890"
 }
 ```
 
@@ -88,9 +88,9 @@ Merge multiple users into a target user.
     "status": "success",
     "group_id": "example_group",
     "merged_count": 2,
-    "target_person_id": "person_abcdef123456",
-    "source_person_ids": ["temp_12345", "temp_67890"],
-    "message": "Successfully merged 2 users into person_abcdef123456"
+    "target_person_id": "abcdef12-3456-7890-abcd-ef1234567890",
+    "source_person_ids": ["12345678-1234-1234-1234-123456789abc", "87654321-4321-4321-4321-cba987654321"],
+    "message": "Successfully merged 2 users into abcdef12-3456-7890-abcd-ef1234567890"
 }
 ```
 
@@ -132,6 +132,32 @@ List all users in a group.
         "permanent_users": 1,
         "temporary_users": 1
     }
+}
+```
+
+### GET /api/groups/{group_id}/users/{person_id}/last_image
+
+Get the latest (last) image for a specific user.
+
+**Success Response:**
+```json
+{
+    "status": "success",
+    "group_id": "example_group",
+    "person_id": "person_12345678-1234-1234-1234-123456789abc",
+    "image": {
+        "image_base64": "base64_encoded_image_data",
+        "filename": "abc123def456.jpg",
+        "created_at": "2025-06-08T15:30:45.123456",
+        "file_size": 25648
+    }
+}
+```
+
+**Error Response:**
+```json
+{
+    "error": "User 'person_id' not found in group 'group_id'"
 }
 ```
 
@@ -247,8 +273,11 @@ Common HTTP status codes:
 
 ## User ID Formats
 
-- **Permanent Users**: `person_{uuid}` (e.g., `person_12345678-1234-1234-1234-123456789abc`)
-- **Temporary Users**: `temp_{uuid}` (e.g., `temp_98765432-4321-4321-4321-cba987654321`)
+All user IDs are now standardized as plain UUIDs without prefixes:
+
+- **All Users**: UUID format (e.g., `12345678-1234-1234-1234-123456789abc`)
+- **User Type Detection**: Temporary vs permanent users are distinguished by metadata, not ID format
+- **Backward Compatibility**: The system can still identify user types through stored metadata
 
 ## Example Workflows
 

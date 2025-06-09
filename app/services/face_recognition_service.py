@@ -1,9 +1,9 @@
 """Face recognition service implementation."""
 
+import base64
 import os
 import time
 import traceback
-import uuid
 
 import cv2
 
@@ -168,9 +168,7 @@ class FaceRecognitionService:
                             face_img = cv2.imread(face_path)
                             new_face_path = self.storage_manager.save_face_image(
                                 face_img, group_id, person_id
-                            )
-
-                            # Add to results
+                            )  # Add to results
                             results.append(
                                 {
                                     "face_index": i,
@@ -182,7 +180,9 @@ class FaceRecognitionService:
                             )
                         else:
                             # Face not recognized with high confidence - create new person
-                            new_person_id = f"person_{uuid.uuid4()}"
+                            new_person_id = (
+                                self.storage_manager.create_permanent_user_id()
+                            )
                             face_img = cv2.imread(face_path)
                             new_face_path = self.storage_manager.save_face_image(
                                 face_img, group_id, new_person_id
@@ -201,10 +201,9 @@ class FaceRecognitionService:
                 print(
                     f"Batch face recognition completed in {time.time() - batch_time_start:.2f} seconds"
                 )
-            else:
-                # No existing model - create new person for each face
+            else:  # No existing model - create new person for each face
                 for i, face_path in enumerate(face_paths):
-                    new_person_id = f"person_{uuid.uuid4()}"
+                    new_person_id = self.storage_manager.create_permanent_user_id()
                     face_img = cv2.imread(face_path)
                     new_face_path = self.storage_manager.save_face_image(
                         face_img, group_id, new_person_id
@@ -449,9 +448,7 @@ class FaceRecognitionService:
                         # No recognition results - create temp user
                         person_id = self.storage_manager.create_temp_user_id()
                         is_new_person = True
-                        recognition_type = "temp_user"
-
-                    # Save face image
+                        recognition_type = "temp_user"  # Save face image
                     new_face_path = self.storage_manager.save_face_image(
                         detected_face, group_id, person_id
                     )
@@ -469,6 +466,9 @@ class FaceRecognitionService:
                         group_id, person_id, metadata
                     )
 
+                    # Convert face to base64 for response
+                    face_base64 = self._convert_face_to_base64(detected_face)
+
                     # Add to results
                     results.append(
                         {
@@ -481,14 +481,14 @@ class FaceRecognitionService:
                             "confidence": confidence,
                             "recognition_type": recognition_type,
                             "saved_to": new_face_path,
+                            "face_image_base64": face_base64,
                         }
                     )
 
                 print(
                     f"Batch face processing completed in {time.time() - batch_time_start:.2f} seconds"
                 )
-            else:
-                # No existing model - create temp user for each face
+            else:  # No existing model - create temp user for each face
                 for i, face_path, detected_face in face_paths:
                     person_id = self.storage_manager.create_temp_user_id()
                     new_face_path = self.storage_manager.save_face_image(
@@ -508,6 +508,9 @@ class FaceRecognitionService:
                         group_id, person_id, metadata
                     )
 
+                    # Convert face to base64 for response
+                    face_base64 = self._convert_face_to_base64(detected_face)
+
                     # Add to results
                     results.append(
                         {
@@ -518,6 +521,7 @@ class FaceRecognitionService:
                             "confidence": 0.0,
                             "recognition_type": "temp_user",
                             "saved_to": new_face_path,
+                            "face_image_base64": face_base64,
                         }
                     )
 
@@ -580,3 +584,62 @@ class FaceRecognitionService:
         }
 
         return {"users": users_data, "summary": summary}
+
+    def get_last_user_image(self, group_id, person_id):
+        """
+        Get the latest (last) image for a user.
+
+        Args:
+            group_id (str): Group identifier
+            person_id (str): Person identifier
+
+        Returns:
+            tuple: (success, result_data or error_message)
+                result_data contains: {"image_base64": str, "filename": str, "created_at": str}
+        """
+        return self.storage_manager.get_last_user_image(group_id, person_id)
+
+    def numpy_to_base64(self, img_array):
+        """
+        Convert a NumPy array image to a base64 encoded string.
+
+        Args:
+            img_array (numpy.ndarray): The image as a NumPy array
+
+        Returns:
+            str: The base64 encoded string of the image
+        """
+        try:
+            # Encode the image as a JPEG file
+            _, buffer = cv2.imencode(".jpg", img_array)
+
+            # Convert to base64
+            img_base64 = base64.b64encode(buffer).decode("utf-8")
+
+            return img_base64
+        except Exception as e:
+            print(f"Error converting image to base64: {str(e)}")
+            return None
+
+    def _convert_face_to_base64(self, face_array):
+        """
+        Convert a face numpy array to base64 encoded string.
+
+        Args:
+            face_array (numpy.ndarray): Face image as numpy array
+
+        Returns:
+            str: Base64 encoded face image
+        """
+        try:
+            # Encode face array to JPEG format
+            success, buffer = cv2.imencode(".jpg", face_array)
+            if not success:
+                return None
+
+            # Convert to base64
+            face_base64 = base64.b64encode(buffer).decode("utf-8")
+            return face_base64
+        except Exception as e:
+            print(f"Error converting face to base64: {str(e)}")
+            return None

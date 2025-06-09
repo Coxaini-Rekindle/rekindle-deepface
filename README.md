@@ -99,6 +99,29 @@ GET /api/groups/{group_id}/users
 
 List all permanent and temporary users in a group.
 
+#### Get Last User Image (NEW!)
+
+```
+GET /api/groups/{group_id}/users/{person_id}/last_image
+```
+
+Get the latest (most recent) image for a specific user.
+
+**Response:**
+```json
+{
+    "status": "success",
+    "group_id": "office_team",
+    "person_id": "person_12345678-1234-1234-1234-123456789abc",
+    "image": {
+        "image_base64": "base64_encoded_image_data",
+        "filename": "abc123def456.jpg",
+        "created_at": "2025-06-08T15:30:45.123456",
+        "file_size": 25648
+    }
+}
+```
+
 #### Recognize Faces
 
 ```

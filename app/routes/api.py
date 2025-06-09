@@ -44,9 +44,7 @@ def add_faces():
     {
         "group_id": "unique_group_identifier",
         "image": "base64_encoded_image"
-    }
-
-    Response JSON format (success):
+    }    Response JSON format (success):
     {
         "status": "success",
         "group_id": "example_group",
@@ -58,7 +56,8 @@ def add_faces():
                 "is_new_person": false,
                 "confidence": 0.85,
                 "recognition_type": "recognized",
-                "saved_to": "/path/to/saved/image.jpg"
+                "saved_to": "/path/to/saved/image.jpg",
+                "face_image_base64": "/9j/4AAQSkZJRgABAQEAYABgAAD..."
             },
             {
                 "face_index": 1,
@@ -67,7 +66,8 @@ def add_faces():
                 "is_new_person": true,
                 "confidence": 0.0,
                 "recognition_type": "temp_user",
-                "saved_to": "/path/to/saved/temp_image.jpg"
+                "saved_to": "/path/to/saved/temp_image.jpg",
+                "face_image_base64": "/9j/4AAQSkZJRgABAQEAYABgAAD..."
             }
         ],
         "timing": {
@@ -257,6 +257,56 @@ def list_users_in_group(group_id):
         users_info = face_service.list_users_in_group(group_id)
 
         return jsonify({"status": "success", "group_id": group_id, **users_info})
+
+    except Exception as e:
+        import traceback
+
+        error_trace = traceback.format_exc()
+        return jsonify({"error": str(e), "trace": error_trace}), 500
+
+
+@api_bp.route("/groups/<group_id>/users/<person_id>/last_image", methods=["GET"])
+def get_last_user_image(group_id, person_id):
+    """
+    Get the latest (last) image for a specific user.
+
+    Response JSON format (success):
+    {
+        "status": "success",
+        "group_id": "example_group",
+        "person_id": "person_12345678-1234-1234-1234-123456789abc",
+        "image": {
+            "image_base64": "base64_encoded_image_data",
+            "filename": "abc123def456.jpg",
+            "created_at": "2025-06-08T15:30:45.123456",
+            "file_size": 25648
+        }
+    }
+
+    Response JSON format (error):
+    {
+        "error": "Error message describing what went wrong"
+    }
+    """
+    try:
+        # Check if group exists
+        if not face_service.storage_manager.group_exists(group_id):
+            return jsonify({"error": f"Group '{group_id}' does not exist"}), 404
+
+        # Get the last image for the user
+        success, result = face_service.get_last_user_image(group_id, person_id)
+
+        if success:
+            return jsonify(
+                {
+                    "status": "success",
+                    "group_id": group_id,
+                    "person_id": person_id,
+                    "image": result,
+                }
+            )
+        else:
+            return jsonify({"error": result}), 404
 
     except Exception as e:
         import traceback

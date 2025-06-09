@@ -97,6 +97,61 @@ def test_list_users():
         return False
 
 
+def test_get_last_user_image(users_data):
+    """Test the get last user image endpoint."""
+    print("🖼️  Testing GET /api/groups/{group_id}/users/{person_id}/last_image...")
+
+    if not users_data:
+        print("   ⚠️  Skipping image test - no users data available")
+        return False
+
+    users = users_data.get("users", {})
+    all_users = users.get("permanent", []) + users.get("temporary", [])
+
+    if len(all_users) == 0:
+        print("   ⚠️  No users found to test image retrieval")
+        return False
+
+    # Test with the first user that has images
+    test_user = None
+    for user in all_users:
+        if user.get("face_count", 0) > 0:
+            test_user = user
+            break
+
+    if not test_user:
+        print("   ⚠️  No users with images found")
+        return False
+
+    person_id = test_user["person_id"]
+    print(f"   Testing with user: {person_id}")
+
+    try:
+        response = requests.get(
+            f"{API_BASE_URL}/groups/{TEST_GROUP_ID}/users/{person_id}/last_image"
+        )
+        print(f"   Status: {response.status_code}")
+
+        if response.status_code == 200:
+            result = response.json()
+            image_data = result.get("image", {})
+
+            print(f"   ✅ Success! Retrieved last image for {result.get('person_id')}")
+            print(f"      - Filename: {image_data.get('filename')}")
+            print(f"      - Created: {image_data.get('created_at')}")
+            print(f"      - Size: {image_data.get('file_size')} bytes")
+            print(f"      - Base64 length: {len(image_data.get('image_base64', ''))}")
+
+            return result
+        else:
+            print(f"   ❌ Error: {response.text}")
+            return False
+
+    except Exception as e:
+        print(f"   ❌ Error: {str(e)}")
+        return False
+
+
 def test_merge_users(users_data):
     """Test the merge users endpoint."""
     print("🔄 Testing POST /api/merge_users...")
@@ -227,15 +282,19 @@ def main():
     users_result = test_list_users()
     print()
 
-    # Test 3: Merge users (if data available)
+    # Test 3: Get last user image
+    last_image_result = test_get_last_user_image(users_result)
+    print()
+
+    # Test 4: Merge users (if data available)
     merge_result = test_merge_users(users_result)
     print()
 
-    # Test 4: Recognize faces
+    # Test 5: Recognize faces
     recognize_result = test_recognize_faces()
     print()
 
-    # Test 5: Set performance
+    # Test 6: Set performance
     performance_result = test_performance_setting()
     print()
 
@@ -247,15 +306,16 @@ def main():
         [
             bool(add_result),
             bool(users_result),
+            bool(last_image_result),
             bool(merge_result),
             bool(recognize_result),
             bool(performance_result),
         ]
     )
 
-    print(f"✅ {tests_passed}/5 tests passed")
+    print(f"✅ {tests_passed}/6 tests passed")
 
-    if tests_passed == 5:
+    if tests_passed == 6:
         print("🎉 All API endpoints are working correctly!")
     else:
         print("⚠️  Some tests failed. Check the output above for details.")

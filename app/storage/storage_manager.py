@@ -1,5 +1,6 @@
 """Storage management for face recognition data."""
 
+import base64
 import json
 import os
 import shutil
@@ -102,16 +103,16 @@ class StorageManager:
 
     def create_temp_user_id(self):
         """
-        Create a temporary user ID with a specific prefix.
+        Create a temporary user ID with UUID format (no prefix).
 
         Returns:
             str: Temporary user ID
         """
-        return f"temp_{uuid.uuid4().hex[:8]}"
+        return str(uuid.uuid4())
 
     def is_temp_user(self, person_id):
         """
-        Check if a person ID is a temporary user.
+        Check if a person ID is a temporary user by checking metadata.
 
         Args:
             person_id (str): Person identifier
@@ -119,7 +120,15 @@ class StorageManager:
         Returns:
             bool: True if temporary user, False otherwise
         """
-        return person_id.startswith("temp_")
+        # Check metadata to determine if user is temporary
+        for group_dir in os.listdir(self.data_dir):
+            group_path = os.path.join(self.data_dir, group_dir)
+            if os.path.isdir(group_path):
+                person_dir = os.path.join(group_path, person_id)
+                if os.path.exists(person_dir):
+                    metadata = self.get_user_metadata(group_dir, person_id)
+                    return metadata.get("is_temp_user", False)
+        return False
 
     def get_user_metadata_path(self, group_id, person_id):
         """
@@ -200,9 +209,7 @@ class StorageManager:
                         for f in os.listdir(person_dir)
                         if f.lower().endswith((".jpg", ".jpeg", ".png"))
                     ]
-                )
-
-                # Get metadata
+                )  # Get metadata
                 metadata = self.get_user_metadata(group_id, person_id)
 
                 user_info = {
@@ -234,15 +241,18 @@ class StorageManager:
         """
         try:
             target_dir = self.get_person_dir(group_id, target_person_id)
+            target_exists = os.path.exists(target_dir)
 
             # Create target directory if it doesn't exist
-            os.makedirs(target_dir, exist_ok=True)
+            if not target_exists:
+                self.create_person_directory(group_id, target_person_id)
 
             merged_info = {
                 "target_person_id": target_person_id,
                 "merged_sources": [],
                 "total_faces_moved": 0,
                 "errors": [],
+                "target_existed": target_exists,
             }
 
             for source_person_id in source_person_ids:
@@ -265,9 +275,18 @@ class StorageManager:
                 for filename in os.listdir(source_dir):
                     if filename.lower().endswith((".jpg", ".jpeg", ".png")):
                         source_path = os.path.join(source_dir, filename)
+
                         # Generate new unique filename to avoid conflicts
-                        new_filename = f"{uuid.uuid4()}.jpg"
-                        target_path = os.path.join(target_dir, new_filename)
+                        base_name, ext = os.path.splitext(filename)
+                        target_filename = filename
+                        counter = 1
+
+                        # Check for filename conflicts and generate unique name if needed
+                        while os.path.exists(os.path.join(target_dir, target_filename)):
+                            target_filename = f"{base_name}_{counter}{ext}"
+                            counter += 1
+
+                        target_path = os.path.join(target_dir, target_filename)
 
                         try:
                             shutil.move(source_path, target_path)
@@ -288,9 +307,9 @@ class StorageManager:
                         "source_metadata": source_metadata,
                     }
                 )
-                merged_info["total_faces_moved"] += faces_moved
-
-                # Remove source directory
+                merged_info[
+                    "total_faces_moved"
+                ] += faces_moved  # Remove source directory
                 try:
                     shutil.rmtree(source_dir)
                 except Exception as e:
@@ -300,6 +319,18 @@ class StorageManager:
 
             # Update target metadata
             target_metadata = self.get_user_metadata(group_id, target_person_id)
+
+            # If target user didn't exist, initialize basic metadata
+            if not merged_info["target_existed"]:
+                target_metadata.update(
+                    {
+                        "created_at": datetime.now().isoformat(),
+                        "person_id": target_person_id,
+                        "is_temp_user": False,  # Merged users are considered permanent
+                        "created_from_merge": True,
+                    }
+                )
+
             target_metadata["merge_history"] = target_metadata.get("merge_history", [])
             target_metadata["merge_history"].append(
                 {
@@ -368,3 +399,76 @@ class StorageManager:
         """
         group_dir = self.get_group_dir(group_id)
         return os.path.exists(group_dir) and os.listdir(group_dir)
+
+    def get_last_user_image(self, group_id, person_id):
+        """
+        Get the latest (last) image for a user.
+
+        Args:
+            group_id (str): Group identifier
+            person_id (str): Person identifier
+
+        Returns:
+            tuple: (success, result_data or error_message)
+                result_data contains: {"image_base64": str, "filename": str, "created_at": str}
+        """
+        try:
+            person_dir = self.get_person_dir(group_id, person_id)
+
+            if not os.path.exists(person_dir):
+                return False, f"User '{person_id}' not found in group '{group_id}'"
+
+            # Get all image files in the person directory
+            image_files = []
+            for filename in os.listdir(person_dir):
+                if (
+                    filename.lower().endswith((".jpg", ".jpeg", ".png"))
+                    and filename != "metadata.json"
+                ):
+                    file_path = os.path.join(person_dir, filename)
+                    file_stat = os.stat(file_path)
+                    image_files.append(
+                        {
+                            "filename": filename,
+                            "path": file_path,
+                            "created_at": file_stat.st_ctime,
+                        }
+                    )
+
+            if not image_files:
+                return (
+                    False,
+                    f"No images found for user '{person_id}' in group '{group_id}'",
+                )
+
+            # Sort by creation time (most recent first)
+            image_files.sort(key=lambda x: x["created_at"], reverse=True)
+            latest_image = image_files[0]
+
+            # Read and encode the image to base64
+            with open(latest_image["path"], "rb") as image_file:
+                image_binary = image_file.read()
+                image_base64 = base64.b64encode(image_binary).decode("utf-8")
+
+            result_data = {
+                "image_base64": image_base64,
+                "filename": latest_image["filename"],
+                "created_at": datetime.fromtimestamp(
+                    latest_image["created_at"]
+                ).isoformat(),
+                "file_size": len(image_binary),
+            }
+
+            return True, result_data
+
+        except Exception as e:
+            return False, f"Error retrieving last image: {str(e)}"
+
+    def create_permanent_user_id(self):
+        """
+        Create a permanent user ID with UUID format (no prefix).
+
+        Returns:
+            str: Permanent user ID
+        """
+        return str(uuid.uuid4())
