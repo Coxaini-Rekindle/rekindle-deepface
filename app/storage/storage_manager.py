@@ -158,7 +158,11 @@ class StorageManager:
 
         # Add timestamp
         metadata["last_updated"] = datetime.now().isoformat()
-        metadata["is_temp_user"] = self.is_temp_user(person_id)
+
+        # Don't override is_temp_user if it's already set in the metadata
+        # This prevents circular dependency issues
+        if "is_temp_user" not in metadata:
+            metadata["is_temp_user"] = False  # Default to permanent user
 
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2)

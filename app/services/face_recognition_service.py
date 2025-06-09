@@ -437,7 +437,12 @@ class FaceRecognitionService:
                             person_id = face_info.get("person_id")
                             is_new_person = False
                             confidence = face_info.get("confidence", 0)
-                            recognition_type = "recognized"
+
+                            # Check if the matched person is already a temporary user
+                            if self.storage_manager.is_temp_user(person_id):
+                                recognition_type = "temp_user"
+                            else:
+                                recognition_type = "recognized"
                         else:
                             # Face not recognized with high confidence - create temp user
                             person_id = self.storage_manager.create_temp_user_id()
@@ -448,12 +453,12 @@ class FaceRecognitionService:
                         # No recognition results - create temp user
                         person_id = self.storage_manager.create_temp_user_id()
                         is_new_person = True
-                        recognition_type = "temp_user"  # Save face image
+                        recognition_type = "temp_user"
+
+                    # Save face image
                     new_face_path = self.storage_manager.save_face_image(
                         detected_face, group_id, person_id
-                    )
-
-                    # Save metadata for the user
+                    )  # Save metadata for the user
                     from datetime import datetime
 
                     metadata = {
@@ -462,6 +467,13 @@ class FaceRecognitionService:
                         "confidence": confidence,
                         "source_image": os.path.basename(temp_img_path),
                     }
+
+                    # Set is_temp_user flag based on recognition type
+                    if recognition_type == "temp_user":
+                        metadata["is_temp_user"] = True
+                    else:
+                        metadata["is_temp_user"] = False
+
                     self.storage_manager.save_user_metadata(
                         group_id, person_id, metadata
                     )
@@ -503,6 +515,7 @@ class FaceRecognitionService:
                         "recognition_type": "temp_user",
                         "confidence": 0.0,
                         "source_image": os.path.basename(temp_img_path),
+                        "is_temp_user": True,
                     }
                     self.storage_manager.save_user_metadata(
                         group_id, person_id, metadata
